@@ -1,0 +1,13 @@
+[Unit]
+Description=flash lights on shutdown
+DefaultDependencies=no
+Before=poweroff.target shutdown.target reboot.target halt.target kexec.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/etc/Scripts
+ExecStart=/usr/bin/python3 /etc/Scripts/stopLights.py &
+RemainAfterExit=yes
+
+[Install]
+WantedBy=shutdown.target poweroff.target halt.target reboot.target

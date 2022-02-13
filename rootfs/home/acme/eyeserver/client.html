@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<meta charset = "utf-8" />
+<title>Mobile GridEye </title>
+<head>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://d3js.org/d3-scale-chromatic.v1.min.js"></script>
+</head>
+<body>
+    <h2>Mobile grideye</h2>
+    <table>
+        <tr><td></td><td id = "maxT"></td><td>Board<br>Conditions</td>
+            <td></td></tr>
+        <tr><td><div id = "eye"></div></td>
+        <td><div id = "legend"></div></td>
+        <td><div id = "boardT">no data</div><br>
+            <div id = "boardH">no data</div><br>
+            <div id = "boardP">no data</div><br>
+            <div id = "boardQ">no data</div></td>
+        </tr>
+        <tr><td></td><td id = "minT"></td></tr>
+    </table>
+    <div id = "output"></div> 
+    
+    <script type = "text/javascript">
+        // https://en.wikipedia.org/wiki/Ommatidium
+        var n;
+        var fixedMin = -5; var fixedMax = 10;
+        var wsUri = "ws://IP_ADDR_HERE:8000/";
+        var output;
+        const boxSize = 32,
+            eyeDimension = 8,
+            eyeSize = eyeDimension * boxSize,
+            margin = 100;
+        var colorMap = d3.scaleSequential().domain([fixedMin, fixedMax])
+            .interpolator(d3.interpolateViridis);
+            
+        let temperature = new Array(64); for (let i=0; i<64; ++i) temperature[i] = 0;
+        let legendTemperature = new Array(8); 
+        for (let i=0; i<8; ++i) 
+            legendTemperature[i] = fixedMin + i * (fixedMax - fixedMin)/8;
+        
+        
+        var eyesvg = d3.select("#eye").append("svg")
+            .attr("width", eyeSize + "px")
+            .attr("height", eyeSize + "px")
+
+        var eyeRect = eyesvg.selectAll("rect")
+            .data(temperature)
+            .enter()
+            .append("rect")
+            .attr("x", function(d, i) { 
+                let x = i%8;
+                return x * boxSize; 
+            })
+            .attr("y", function(d, i) { 
+                let y = Math.floor(i/8);
+                //j = 8 * (7 - Math.floor(i/8)) + i%8;
+                //console.log("%d -> %d", i, j);
+                
+                return y * boxSize; 
+            })
+            .attr("width", boxSize + "px")
+            .attr("height", boxSize + "px")
+            .style("fill", function(d, i) {
+                var returnColor;
+                returnColor = colorMap(d);
+                return returnColor;
+            });
+        
+        var legendsvg = d3.select("#legend").append("svg")
+            .attr("width", "80px")
+            .attr("height", eyeSize + "px")
+            
+        var legendRect = legendsvg.selectAll("rect")
+            .data(legendTemperature)
+            .enter()
+            .append("rect")
+            .attr("x", 8)
+            .attr("y", function(d, i) { 
+                y = 7-i;
+                return y * boxSize; 
+            })
+            .attr("width", "24px")
+            .attr("height", boxSize + "px")
+            .style("fill", function(d, i) {
+                var returnColor;
+                returnColor = colorMap(d);
+                return returnColor;
+            });
+        
+        
+        var needAnother = false;
+        
+        websocket = new WebSocket(wsUri);
+        
+        function init() {
+            output = document.getElementById("output");
+                
+            websocket.onopen = function(evt) {
+                onOpen(evt)
+            };
+            
+            websocket.onclose = function(evt) {
+                onClose(evt)
+            };
+
+            websocket.onmessage = function(evt) {
+                onMessage(evt)
+            };
+
+            websocket.onerror = function(evt) {
+                onError(evt)
+            };
+        }
+            
+        function onOpen(evt) {
+            writeToScreen("CONNECTED");
+            websocket.send("socket opened");
+        }
+        
+        function onClose(evt) {
+            writeToScreen("Closing");
+        }
+            
+        function onMessage(evt) {
+            //writeToScreen('<span style = "color: blue;">RESPONSE: ' +
+            //    evt.data+'</span>');
+            
+            if(evt.data.indexOf('{"type') === 0) {
+                var envObj = JSON.parse(evt.data);
+                d3.select('#boardT').text("T: "+`${Math.round(10*envObj.MOBITEMPERATURE)/10}`+"C");
+                d3.select('#boardH').text("H: "+`${Math.round(10*envObj.MOBIHUMIDITY)/10}`+"%");
+                d3.select('#boardP').text("P: "+`${Math.round(10*envObj.MOBIBP)/10}`+" hPa");
+                d3.select('#boardQ').text("Q: "+`${Math.round(10*envObj.AirQuality)/10}`+"");
+            }
+            else if(evt.data.indexOf('eye') === 0) {
+                temperature = evt.data.substring(4).split(',').map(i => isNaN(i) ? i : +i);
+                minT = d3.min(temperature); 
+                maxT = d3.max(temperature);
+                d3.select('#maxT').text(`${Math.round(10*maxT)/10}`);
+                d3.select('#minT').text(`${Math.round(10*minT)/10}`);
+    
+                //minT = fixedMin; maxT = fixedMax;
+                colorMap = d3.scaleSequential()
+                    .domain([minT, maxT])
+                    .interpolator(d3.interpolateViridis);
+
+                // array is upside down, but not backwards
+                mappedTemperature = new Array(64); 
+            
+                for (i=0; i<64; ++i){
+                    // array is upside down, but not backwards
+                    j = 8 * (7 - Math.floor(i/8)) + i%8;
+                    // array is upside down, and backwards
+                    //j = 63 - 8 * (7 - Math.floor(i/8)) + i%8;
+                    // array is upside down
+                    //j = 63 - i;
+                    // array is backwards
+                    //j = 7 + 16*Math.floor(i/8) - i
+
+                    mappedTemperature[i] = temperature[j];
+                }
+                    
+                eyeRect
+                    .data(mappedTemperature)
+                    .style("fill", function(d, i) {
+                        var returnColor;
+                        returnColor = colorMap(d);
+                        return returnColor;
+                    });
+                    
+                eyeRect.transition().duration(500);
+            }
+            needAnother = false;
+        }
+
+        function onError(evt) {
+            writeToScreen('<span style="color: red;">ERROR:</span> ' + evt.data);
+        }
+            
+        function writeToScreen(message) {
+            var pre = document.createElement("p"); 
+            pre.style.wordWrap = "break-word"; 
+            pre.innerHTML = message; output.appendChild(pre);
+        }
+        
+        function tick() {
+            console.log("ticking %d", websocket.status)
+            if(needAnother){
+                needAnother = false;
+                websocket.send("more please");
+                requestIdleCallback(tick);
+            }
+        }
+        
+        window.addEventListener("load", init, false);
+        requestIdleCallback(tick);
+
+    </script>
+</body>	
+
+</html>

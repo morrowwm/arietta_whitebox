@@ -1,0 +1,11 @@
+[Unit]
+Description=Weather data node. Supplying barometric pressure and humidity
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /etc/Scripts/nodesensors.py &
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
