@@ -1,3 +1,28 @@
+'''
+This script is started at boot time. It checks if the internet can be reached, and it not, puts the machine into WAP mode.
+As a WAP, the device uses credentials hardcoded below in the create_hotspot() method.
+From a device with wifi, connect to the hotspot, and setup the network.
+That can be done using nmcli directly. Or create a file /etc/mynetwork.json with your wifi credentials. There is a template beside this script.
+It should contain
+    {"ssid":"mynetwork","password":"mypassword"}
+Then rerun the script or reboot, and the script will create the network connection.
+
+Use
+    journalctl -u wap2lan.service
+to troubleshoot.
+When the script is running the carrier board LED will light to indicate what is happening.
+    red - can't see the internet
+    flashing green - trying the network credentials
+    green: on the network
+    or
+    blue: staying as WAP with IP address 192.168.4.1
+So don't try ssh until you see solid green or blue.
+
+use
+   sudo systemctl disable wap2lan.service # to disable the script
+   sudo systemctl start wap2lan.service # to run
+   sudo systemctl enable wap2lan.service # to reenable
+'''
 import socket
 import time
 import struct
@@ -7,10 +32,6 @@ import os
 import LED
 from multiprocessing import Process
 import json
-
-SERVER_ADD = '192.168.4.1'
-
-up_time_cmd = 'ifconfig | grep wlan0'
 
 def wifi_connect(wifi_name, wifi_pwd):
     LED.rgboff()
@@ -62,11 +83,13 @@ def wifi_connect(wifi_name, wifi_pwd):
 
 def create_hotspot():
     id = 'WHITEBOX'
+    pwd = 'canyouhearme'
     sp.call(["nmcli", "device", "wifi", "hotspot", "con-name", "hotspot", "ssid", id, "band", "bg",
-             "password", "canyouhearme"])
+             "password", pwd])
     sp.call(["nmcli", "connection", "modify", 'hotspot', "ipv4.addresses", "192.168.4.1/24"])
 
 def check_up_time():
+    up_time_cmd = 'ifconfig | grep wlan0'
     while True:
         try:
             up_time = sp.check_output(up_time_cmd, shell=True)
@@ -80,7 +103,7 @@ def check_up_time():
 def testInternet():
     try:
         print('wap2lan: Checking connection')
-        socket.setdefaulttimeout(20)
+        socket.setdefaulttimeout(10)
         host = socket.gethostbyname('www.google.com')
         s = socket.create_connection((host,80), 2)
         s.close()
