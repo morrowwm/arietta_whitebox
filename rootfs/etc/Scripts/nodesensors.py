@@ -7,6 +7,7 @@ from datetime import datetime
 import paho.mqtt.client as mqtt
 import json
 import bme680
+import smbus
 from mpio import ADC
 import os
 import gc
@@ -17,6 +18,18 @@ GREEN_PATH = """/sys/class/gpio/pioA26/value"""
 BLUE_PATH = """/sys/class/gpio/pioA27/value"""
 EXPORT_CMD = 'echo {0} > /sys/class/gpio/export'
 DIRECTION_CMD = 'echo out > /sys/class/gpio/pioA{0}/direction'
+
+# Create paths if they don't exist already
+if not os.path.exists(BLUE_PATH):
+	print('Exporting paths')
+	subprocess.call(EXPORT_CMD.format('25'), shell = True)
+	subprocess.call(EXPORT_CMD.format('26'), shell = True)
+	subprocess.call(EXPORT_CMD.format('27'), shell = True)
+	subprocess.call(DIRECTION_CMD.format('25'),shell = True)
+	subprocess.call(DIRECTION_CMD.format('26'),shell = True)
+	subprocess.call(DIRECTION_CMD.format('27'),shell = True)
+
+BUS = smbus.SMBus(0)
 
 data = {}
 
@@ -73,21 +86,21 @@ def blueOff():
 
 # The callback for when the client receives a CONNACK response from the server.
 def on_connect(client, userdata, flags, rc):
-    if rc == 0:
-        global isConnected
-        isConnected = True
-        print("Connected with result code "+str(rc))
-        # Subscribing in on_connect() means that if we lose the connection and
-        # reconnect then subscriptions will be renewed.
-        client.subscribe("environment/crawlspace")
-    else:
-        print("Connection failed")
-        
+    print("Connected with result code "+str(rc))
+    # Subscribing in on_connect() means that if we lose the connection and
+    # reconnect then subscriptions will be renewed.
+    client.subscribe("environment/crawlspace")
+
 # The callback for when a PUBLISH message is received from the server.
 def on_message(client, userdata, msg):
     print(msg.topic+" "+str(msg.payload))
-    f = open('received.dat', 'a')
-    data = msg.payload.split(",");
+    f = open('crawlspace.dat', 'a')
+    p = msg.payload.decode()
+    try:
+        data = p.split(",");
+    except Exception as error:
+        print('Payload {error} not parsed')
+        data = None
     datastr = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     for datum in data:
         (key, value) = datum.split(":")
@@ -137,7 +150,6 @@ if __name__ == "__main__":
 
     lastTime = 0
     lastBanner = 30
-    isConnected = False
 
     try:
         with open("/etc/Scripts/mqtt_cred.json", "r") as configfile:
@@ -151,47 +163,59 @@ if __name__ == "__main__":
 
     client.username_pw_set(mqttcred['user'], mqttcred['password'])
     client.connect(mqttcred['broker'], 1883, 60)
-    
-    client.loop_start()
-    while isConnected == False:
-        time.sleep(0.1)
 
-    try:
-        while True:
-            now = time.time()
-            if lastBanner > 20:
-                lastBanner = 0
-                # print("Vbus\tIbus\tVsupply\tVshunt\tPower")
+    while True:
+        now = time.time()
+        if lastBanner > 20:
+            lastBanner = 0
 
-            if now - lastTime > updateInterval:
-                redOn()
-                lastTime = now
+        if now - lastTime > updateInterval:
+            redOn()
+            lastTime = now
 
-                data['time'] = int(time.time())
-                if physicalSensor.get_sensor_data() and physicalSensor.data.heat_stable:
-                    data['GasResistance'] = physicalSensor.data.gas_resistance
-                    data['HUM'] = physicalSensor.data.humidity
-                    data['TEMPERATURE'] = physicalSensor.data.temperature
-                    data['PRES'] = physicalSensor.data.pressure
-                    data['OUTAQ'] = calculateScore(data['GasResistance'], data['HUM'])
-                redOff()
-                blueOn()
+            # for temperature, use the middle half of the grideye readings
+            n = 0
+            ommatidium = []
+            for line in range(8):
+                offset = 0x80+line*16
+                block = BUS.read_i2c_block_data(0x68,offset, 16)
+                for j in range(0, 16, 2):
+                    upper = block[j+1] << 8
+                    lower = block[j]
+                    val = upper + lower
+                    if 2048 & val == 2048:
+                       val -= 4096
+                    val = round(0.2 * val, 2)
+                    n = n + 1
+                    ommatidium.append(val)
+            ommatidium.sort()
+            # print(ommatidium, n)
+            temperature = sum(ommatidium[16:47]) / 32.0
 
-                data['IRRA'] = adc.value(3) * 0.9765625
-                data['SND'] = (83.2072 + adc.value(2)) / 11.003
-                if adc.value(1) > 800:
-                    data['MOTION'] = 1
-                else:
-                    data['MOTION'] = 0
-            
-                blueOff()
+            data['time'] = int(time.time())
+            if physicalSensor.get_sensor_data() and physicalSensor.data.heat_stable:
+                data['NODE99GasResistance'] = physicalSensor.data.gas_resistance
+                data['NODE99HUM'] = physicalSensor.data.humidity
+                data['NODE99TEMPERATURE'] = temperature
+                data['NODE99BoardTemperature'] = physicalSensor.data.temperature
+                data['NODE99PRES'] = physicalSensor.data.pressure
+                data['NODE99AQ'] = calculateScore(data['NODE99GasResistance'], data['NODE99HUM'])
+            redOff()
+            blueOn()
 
-                time.sleep(updateInterval)
-                lastBanner += 1
+            data['NODE99IRRA'] = adc.value(3) * 0.9765625
+            data['NODE99SND'] = (83.2072 + adc.value(2)) / 11.003
+            if adc.value(1) > 800:
+                data['NODE99MOTION'] = 1
+            else:
+                data['NODE99MOTION'] = 0
+        
+            blueOff()
 
-                msg = json.dumps(data)
-                client.publish(f"{mqttcred['topic']}", msg)
-                print(f"Publishing to {mqttcred['broker']} topic {mqttcred['topic']}: {msg}")
-    except KeyboardInterrupt:
-        client.disconnect()
-        client.loop_stop
+            time.sleep(updateInterval)
+            lastBanner += 1
+
+            msg = json.dumps(data)
+            client.publish(f"{mqttcred['topic']}", msg)
+            print(f"Publishing to {mqttcred['broker']} topic {mqttcred['topic']}: {msg}")
+            client.loop()
